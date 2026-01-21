@@ -8,16 +8,12 @@ const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const QRCode = require('qrcode-terminal');
 
-// Usar fetch nativo do Node 18+ ou node-fetch
-let fetch;
-try {
-  fetch = globalThis.fetch || require('node-fetch');
-} catch {
-  fetch = require('node-fetch');
-}
+// Usar fetch nativo do Node 18+ (não precisa de node-fetch)
+// Node.js 18+ tem fetch nativo
+const fetch = globalThis.fetch;
 
-const WEBHOOK_URL = 'https://tamboril-burguer.vercel.app/api/webhook/whatsapp';
-const STORE_STATUS_URL = 'https://tamboril-burguer.vercel.app/api/store/status';
+const WEBHOOK_URL = 'https://delivery-back-eosin.vercel.app/api/webhook/whatsapp';
+const STORE_STATUS_URL = 'https://delivery-back-eosin.vercel.app/api/store/status';
 
 let sock = null;
 let reconectando = false;
