@@ -1,0 +1,15 @@
+{
+  "name": "tamboril-burguer-bot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node bot-conversacional.js",
+    "dev": "node bot-conversacional.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "node-fetch": "^3.3.2",
+    "pino": "^10.2.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

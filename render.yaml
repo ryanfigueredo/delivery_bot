@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: tamboril-bot
+    env: node
+    buildCommand: npm install
+    startCommand: npm run bot
+    envVars:
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /
+    plan: free
