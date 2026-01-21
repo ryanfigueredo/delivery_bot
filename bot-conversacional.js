@@ -19,6 +19,8 @@ const STORE_STATUS_URL = 'https://delivery-back-eosin.vercel.app/api/store/statu
 
 let sock = null;
 let reconectando = false;
+let heartbeatInterval = null;
+let lastHeartbeat = Date.now();
 
 // Sistema de prioridade de conversas (quando cliente pede atendente)
 const conversasPrioridade = new Map();
@@ -123,12 +125,6 @@ app.get('/', (req, res) => {
       </body>
     </html>
   `);
-});
-
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`🌐 Servidor QR Code rodando na porta ${PORT}`);
-  console.log(`📱 Acesse: http://localhost:${PORT} ou a URL pública do Railway`);
 });
 
 // Cache do status da loja (atualizado periodicamente)
@@ -1339,6 +1335,51 @@ Digite o número da opção:`);
 }
 
 /**
+ * Heartbeat para manter conexão ativa
+ */
+function iniciarHeartbeat() {
+  // Limpar intervalo anterior se existir
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+  }
+  
+  // Enviar um heartbeat a cada 30 segundos para manter conexão viva
+  heartbeatInterval = setInterval(async () => {
+    try {
+      if (sock && sock.user) {
+        // Enviar uma atualização de presença (não envia mensagem real)
+        await sock.sendPresenceUpdate('available');
+        lastHeartbeat = Date.now();
+      }
+    } catch (error) {
+      console.error('⚠️ Erro no heartbeat:', error.message);
+      // Se o heartbeat falhar, pode ser que a conexão caiu
+      // Tentar reconectar
+      if (sock) {
+        try {
+          await sock.end();
+        } catch (e) {
+          // Ignorar erro ao fechar socket
+        }
+      }
+      sock = null;
+      reconectando = false;
+      conectarWhatsApp();
+    }
+  }, 30000); // 30 segundos
+}
+
+/**
+ * Parar heartbeat
+ */
+function pararHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
+/**
  * Conecta ao WhatsApp
  */
 async function conectarWhatsApp() {
@@ -1354,6 +1395,15 @@ async function conectarWhatsApp() {
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 10000,
+      // Configurações para melhor estabilidade
+      getMessage: async () => {
+        // Retornar vazio para evitar problemas de sincronização
+        return;
+      },
+      markOnlineOnConnect: true,
+      syncFullHistory: false,
+      // Reconnect automático mais agressivo
+      shouldReconnect: () => true,
     });
     
     sock.ev.on('creds.update', saveCreds);
@@ -1372,8 +1422,12 @@ async function conectarWhatsApp() {
       }
       
       if (connection === 'close') {
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
         const shouldReconnect = lastDisconnect?.error instanceof Boom && 
-                                lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut;
+                                statusCode !== DisconnectReason.loggedOut &&
+                                statusCode !== DisconnectReason.badSession;
+        
+        console.log(`⚠️ Desconectado do WhatsApp. Código: ${statusCode}`);
         
         if (shouldReconnect) {
           console.log('🔄 Reconectando em 5 segundos...');
@@ -1383,13 +1437,25 @@ async function conectarWhatsApp() {
             conectarWhatsApp();
           }, 5000);
         } else {
-          console.log('❌ Desconectado. Escaneie QR Code novamente.');
+          console.log('❌ Desconectado permanentemente. Código:', statusCode);
+          console.log('💡 Se foi loggedOut ou badSession, você precisa escanear o QR code novamente.');
           reconectando = false;
+          // Tentar reconectar mesmo assim após 30 segundos (pode ser erro temporário)
+          setTimeout(() => {
+            console.log('🔄 Tentando reconectar novamente...');
+            reconectando = false;
+            conectarWhatsApp();
+          }, 30000);
         }
       } else if (connection === 'open') {
         console.log('✅ Conectado ao WhatsApp!');
         currentQR = null; // Limpar QR code após conectar
         reconectando = false;
+        
+        // Iniciar heartbeat para manter conexão ativa
+        iniciarHeartbeat();
+      } else if (connection === 'connecting') {
+        console.log('🔄 Conectando ao WhatsApp...');
       }
     });
     
@@ -1482,11 +1548,38 @@ setInterval(async () => {
 }, 3000); // Verifica a cada 3 segundos
 
 console.log('🚀 Iniciando bot WhatsApp conversacional...');
-console.log(`🌐 Servidor API rodando na porta ${PORT}`);
 conectarWhatsApp();
+
+// Health check endpoint para Railway/Render não reiniciar o bot
+app.get('/health', (req, res) => {
+  const isConnected = sock && sock.user;
+  const timeSinceLastHeartbeat = Date.now() - lastHeartbeat;
+  
+  res.json({
+    status: isConnected ? 'healthy' : 'connecting',
+    connected: isConnected,
+    lastHeartbeat: timeSinceLastHeartbeat < 60000 ? 'ok' : 'stale',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Iniciar servidor Express
+app.listen(PORT, () => {
+  console.log(`🌐 Servidor API rodando na porta ${PORT}`);
+  console.log(`📱 Acesse http://localhost:${PORT} para ver o QR code`);
+  console.log(`💚 Health check: http://localhost:${PORT}/health`);
+});
 
 process.on('SIGINT', () => {
   console.log('\n👋 Encerrando...');
+  pararHeartbeat();
+  if (sock) sock.end();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n👋 Encerrando (SIGTERM)...');
+  pararHeartbeat();
   if (sock) sock.end();
   process.exit(0);
 });
