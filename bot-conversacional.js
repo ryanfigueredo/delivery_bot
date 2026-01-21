@@ -7,6 +7,8 @@ const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = requi
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const QRCode = require('qrcode-terminal');
+const QRCodeImage = require('qrcode');
+const express = require('express');
 
 // Usar fetch nativo do Node 18+ (não precisa de node-fetch)
 // Node.js 18+ tem fetch nativo
@@ -17,6 +19,114 @@ const STORE_STATUS_URL = 'https://delivery-back-eosin.vercel.app/api/store/statu
 
 let sock = null;
 let reconectando = false;
+let currentQR = null;
+
+// Servidor Express para servir QR code como imagem
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/qr', (req, res) => {
+  if (!currentQR) {
+    return res.status(404).send('QR Code não disponível. Aguarde o bot gerar um novo QR code.');
+  }
+  
+  // Retornar QR code como imagem PNG
+  QRCodeImage.toDataURL(currentQR, { width: 400, margin: 2 })
+    .then(url => {
+      const img = Buffer.from(url.split(',')[1], 'base64');
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Content-Length': img.length
+      });
+      res.end(img);
+    })
+    .catch(err => {
+      res.status(500).send('Erro ao gerar QR code: ' + err.message);
+    });
+});
+
+app.get('/', (req, res) => {
+  if (!currentQR) {
+    return res.send(`
+      <html>
+        <head><title>Bot WhatsApp - QR Code</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1>🤖 Bot WhatsApp</h1>
+          <p>QR Code não disponível no momento.</p>
+          <p>Aguarde o bot gerar um novo QR code...</p>
+          <p><small>Esta página atualiza automaticamente a cada 5 segundos.</small></p>
+          <script>setTimeout(() => location.reload(), 5000);</script>
+        </body>
+      </html>
+    `);
+  }
+  
+  res.send(`
+    <html>
+      <head>
+        <title>Bot WhatsApp - QR Code</title>
+        <meta http-equiv="refresh" content="5">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 50px;
+            background: #f5f5f5;
+          }
+          .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 500px;
+            margin: 0 auto;
+          }
+          h1 { color: #25D366; }
+          img { 
+            max-width: 100%;
+            border: 5px solid #25D366;
+            border-radius: 10px;
+            margin: 20px 0;
+          }
+          .instructions {
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            text-align: left;
+          }
+          .instructions ol {
+            margin: 10px 0;
+            padding-left: 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>🤖 Bot WhatsApp</h1>
+          <h2>Escaneie o QR Code</h2>
+          <img src="/qr" alt="QR Code WhatsApp" />
+          <div class="instructions">
+            <strong>Como conectar:</strong>
+            <ol>
+              <li>Abra o WhatsApp no seu celular</li>
+              <li>Vá em: <strong>Configurações</strong> → <strong>Aparelhos conectados</strong></li>
+              <li>Toque em: <strong>Conectar um aparelho</strong></li>
+              <li>Escaneie o QR code acima</li>
+            </ol>
+          </div>
+          <p><small>Esta página atualiza automaticamente. Se o QR code expirar, aguarde um novo.</small></p>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`🌐 Servidor QR Code rodando na porta ${PORT}`);
+  console.log(`📱 Acesse: http://localhost:${PORT} ou a URL pública do Railway`);
+});
 
 // Cache do status da loja (atualizado periodicamente)
 let storeStatusCache = {
@@ -1214,9 +1324,13 @@ async function conectarWhatsApp() {
       const { connection, lastDisconnect, qr } = update;
       
       if (qr) {
+        currentQR = qr; // Salvar QR code para servir como imagem
         console.log('\n📱 ESCANEIE O QR CODE COM SEU WHATSAPP:\n');
-        QRCode.generate(qr, { small: true });
+        console.log(`🌐 Acesse a URL pública do Railway para ver o QR code como imagem escaneável!`);
+        console.log(`   Ou acesse: http://localhost:${PORT}\n`);
+        QRCode.generate(qr, { small: true }); // Mostrar também no terminal
         console.log('\n⬅️ No WhatsApp: Configurações > Aparelhos conectados > Conectar um aparelho\n');
+        console.log(`💡 Dica: O QR code em ASCII acima pode não funcionar. Use a URL do Railway para ver a imagem!`);
       }
       
       if (connection === 'close') {
@@ -1236,6 +1350,7 @@ async function conectarWhatsApp() {
         }
       } else if (connection === 'open') {
         console.log('✅ Conectado ao WhatsApp!');
+        currentQR = null; // Limpar QR code após conectar
         reconectando = false;
       }
     });
