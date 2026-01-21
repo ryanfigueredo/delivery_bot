@@ -19,6 +19,9 @@ const STORE_STATUS_URL = 'https://delivery-back-eosin.vercel.app/api/store/statu
 
 let sock = null;
 let reconectando = false;
+
+// Sistema de prioridade de conversas (quando cliente pede atendente)
+const conversasPrioridade = new Map();
 let currentQR = null;
 
 // Servidor Express para servir QR code como imagem
@@ -295,6 +298,40 @@ async function enviarMensagem(remetente, texto) {
     console.error('Erro ao enviar mensagem:', error);
     return false;
   }
+}
+
+/**
+ * Marcar conversa como prioridade (cliente pediu atendente)
+ */
+function marcarConversaPrioridade(remetente) {
+  conversasPrioridade.set(remetente, {
+    timestamp: Date.now(),
+    ultimaMensagem: Date.now()
+  });
+  console.log(`🔔 CONVERSA PRIORITÁRIA: ${remetente} pediu atendimento`);
+}
+
+/**
+ * Enviar mensagem de atendimento (faz conversa subir no topo do WhatsApp)
+ */
+async function enviarMensagemAtendimento(remetente) {
+  const mensagem = `👋 *ATENDIMENTO HUMANIZADO*
+
+Olá! Um de nossos atendentes vai te responder em breve.
+
+Enquanto isso, você pode continuar fazendo seu pedido normalmente! 😊
+
+*Digite qualquer coisa que nossa equipe verá sua mensagem.*`;
+
+  await enviarMensagem(remetente, mensagem);
+  marcarConversaPrioridade(remetente);
+  
+  // Follow-up após 30 segundos para manter conversa no topo
+  setTimeout(async () => {
+    if (conversasPrioridade.has(remetente)) {
+      await enviarMensagem(remetente, '💬 *Sua mensagem foi recebida!*\n\nNossa equipe está verificando e vai te responder em breve. Obrigado pela paciência! 🙏');
+    }
+  }, 30000);
 }
 
 /**
@@ -826,11 +863,11 @@ async function processarMensagem(remetente, texto) {
             await enviarMensagem(remetente, resumo);
           } else {
             // Se não tiver itens, o botão 2 é "Falar com atendente"
-            await enviarMensagem(remetente, 'Para falar com nosso atendente, envie uma mensagem ou ligue para nosso número. Em breve retornaremos! 📞');
+            await enviarMensagemAtendimento(remetente);
           }
         } else if (botaoIndex === 2) {
           // Botão 3: Falar com atendente (só aparece se tiver itens)
-          await enviarMensagem(remetente, 'Para falar com nosso atendente, envie uma mensagem ou ligue para nosso número. Em breve retornaremos! 📞');
+          await enviarMensagemAtendimento(remetente);
         }
       }
       // Verificar se loja está aberta antes de processar pedidos
@@ -902,7 +939,8 @@ async function processarMensagem(remetente, texto) {
           await enviarMensagem(remetente, 'Você ainda não tem itens no pedido. Digite *1* ou *SIM* para começar!');
         }
       } else if (textoLower === '3' || textoLower.includes('atendente') || textoLower.includes('falar')) {
-        await enviarMensagem(remetente, 'Para falar com nosso atendente, envie uma mensagem ou ligue para nosso número. Em breve retornaremos! 📞');
+        // Quando cliente pede atendente, enviar mensagem que faz conversa subir no topo
+        await enviarMensagemAtendimento(remetente);
       } else {
         // Se não reconhecer o comando, mostra a saudação inicial
         await saudacaoInicial(remetente);
@@ -1380,7 +1418,71 @@ async function conectarWhatsApp() {
   }
 }
 
+// Fila de mensagens para enviar (quando pedido sai para entrega, etc)
+const messageQueue = [];
+
+// Endpoint para listar conversas prioritárias (para o app admin)
+app.get('/api/bot/priority-conversations', (req, res) => {
+  try {
+    const prioritarias = Array.from(conversasPrioridade.entries())
+      .map(([remetente, info]) => ({
+        remetente,
+        phone: remetente,
+        tempoEspera: Math.floor((Date.now() - info.timestamp) / 1000 / 60), // minutos
+        timestamp: info.timestamp,
+        ultimaMensagem: info.ultimaMensagem
+      }))
+      .sort((a, b) => b.tempoEspera - a.tempoEspera); // Mais antigas primeiro
+    
+    res.json({ 
+      conversations: prioritarias,
+      total: prioritarias.length 
+    });
+  } catch (error) {
+    console.error('Erro ao listar conversas prioritárias:', error);
+    res.json({ conversations: [], total: 0 });
+  }
+});
+
+// Endpoint Express para receber comandos de envio
+app.post('/api/bot/send-message', (req, res) => {
+  const { phone, message } = req.body;
+  
+  if (!phone || !message) {
+    return res.status(400).json({ error: 'phone e message são obrigatórios' });
+  }
+  
+  // Adicionar à fila
+  messageQueue.push({ phone, message, timestamp: Date.now() });
+  const phoneShort = phone.length > 15 ? phone.substring(0, 15) + '...' : phone;
+  console.log(`📨 Mensagem adicionada à fila: ${phoneShort}`);
+  
+  res.json({ success: true, message: 'Mensagem adicionada à fila' });
+});
+
+// Verificar fila de mensagens periodicamente e enviar
+setInterval(async () => {
+  try {
+    if (messageQueue.length > 0 && sock) {
+      const messageData = messageQueue.shift(); // Remove da fila
+      const phoneShort = messageData.phone.length > 15 ? messageData.phone.substring(0, 15) + '...' : messageData.phone;
+      console.log(`📨 Enviando mensagem da fila para: ${phoneShort}`);
+      const sucesso = await enviarMensagem(messageData.phone, messageData.message);
+      if (sucesso) {
+        console.log(`✅ Mensagem enviada com sucesso`);
+      } else {
+        // Se falhar, recoloca na fila para tentar depois
+        messageQueue.unshift(messageData);
+        console.log(`⚠️ Falha ao enviar, mensagem recolocada na fila`);
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao processar fila de mensagens:', error);
+  }
+}, 3000); // Verifica a cada 3 segundos
+
 console.log('🚀 Iniciando bot WhatsApp conversacional...');
+console.log(`🌐 Servidor API rodando na porta ${PORT}`);
 conectarWhatsApp();
 
 process.on('SIGINT', () => {
