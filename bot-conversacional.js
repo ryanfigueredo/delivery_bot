@@ -756,6 +756,18 @@ async function finalizarPedido(remetente, conversa) {
     const itemsComPagamento = [...conversa.pedido.itens];
     
     // Enviar para webhook
+    const payload = {
+      tenant_id: TENANT_ID,
+      customer_name: conversa.pedido.nome,
+      customer_phone: conversa.pedido.telefone,
+      items: itemsComPagamento,
+      total_price: total,
+      payment_method: conversa.pedido.metodoPagamento,
+      order_type: conversa.pedido.tipoPedido || 'restaurante',
+      delivery_address: conversa.pedido.endereco || null
+    };
+    console.log('Enviando pedido para webhook:', { url: WEBHOOK_URL, tenant: TENANT_ID, total });
+
     const response = await fetch(WEBHOOK_URL, {
       method: 'POST',
       headers: { 
@@ -763,20 +775,29 @@ async function finalizarPedido(remetente, conversa) {
         'X-API-Key': TENANT_API_KEY,
         'X-Tenant-Id': TENANT_ID
       },
-      body: JSON.stringify({
-        tenant_id: TENANT_ID, // Enviar também no body para compatibilidade
-        customer_name: conversa.pedido.nome,
-        customer_phone: conversa.pedido.telefone,
-        items: itemsComPagamento,
-        total_price: total,
-        payment_method: conversa.pedido.metodoPagamento,
-        order_type: conversa.pedido.tipoPedido || 'restaurante',
-        delivery_address: conversa.pedido.endereco || null
-      })
+      body: JSON.stringify(payload)
     });
-    
-    const result = await response.json();
-    
+
+    let result;
+    try {
+      const text = await response.text();
+      try {
+        result = JSON.parse(text);
+      } catch (e) {
+        console.error('Webhook retornou não-JSON. Status:', response.status, 'Body:', text.slice(0, 500));
+        await enviarMensagem(remetente, '❌ Erro ao processar pedido. A API retornou resposta inválida. Tente novamente.');
+        return false;
+      }
+    } catch (e) {
+      console.error('Erro ao chamar webhook:', e);
+      await enviarMensagem(remetente, '❌ Erro ao processar pedido. Não foi possível conectar à API. Tente novamente.');
+      return false;
+    }
+
+    if (!response.ok) {
+      console.error('Webhook erro:', response.status, result);
+    }
+
     if (result.success) {
       // Formatar ID do pedido: #001, #002, etc
       const orderIdDisplay = result.display_id || (result.daily_sequence ? `#${String(result.daily_sequence).padStart(3, '0')}` : `#${result.order_id.substring(0, 6).toUpperCase()}`);
@@ -819,7 +840,11 @@ Seu pedido está sendo preparado!
       
       return true;
     } else {
-      await enviarMensagem(remetente, '❌ Erro ao processar pedido. Tente novamente.');
+      const errMsg = result.error || 'Erro desconhecido';
+      const errDetails = result.details ? (Array.isArray(result.details) ? result.details.join('; ') : String(result.details)) : '';
+      console.error('Webhook retornou success=false:', errMsg, errDetails);
+      const extra = errDetails ? `\n${String(errDetails).slice(0, 120)}` : '';
+      await enviarMensagem(remetente, `❌ Erro ao processar pedido: ${errMsg}${extra}\n\nTente novamente.`);
       return false;
     }
   } catch (error) {
