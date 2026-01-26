@@ -1,5 +1,5 @@
 /**
- * Bot WhatsApp Conversacional - Tamboril Burguer
+ * Bot WhatsApp Conversacional - Pedidos Express
  * Fluxo completo de pedido interativo
  */
 
@@ -16,6 +16,11 @@ const fetch = globalThis.fetch;
 
 const WEBHOOK_URL = 'https://delivery-back-eosin.vercel.app/api/webhook/whatsapp';
 const STORE_STATUS_URL = 'https://delivery-back-eosin.vercel.app/api/store/status';
+
+// Tenant ID ou Slug (configurar via variável de ambiente)
+// Pode ser: tenant_id (UUID) ou tenant_slug (ex: "tamboril-burguer")
+const TENANT_ID = process.env.TENANT_ID || process.env.TENANT_SLUG || 'tamboril-burguer';
+const TENANT_API_KEY = process.env.TENANT_API_KEY || 'tamboril-burguer-api-key-2024-secure';
 
 let sock = null;
 let reconectando = false;
@@ -182,7 +187,7 @@ function getMensagemLojaFechada() {
     mensagem += `⏰ Não há previsão de abertura no momento.\n\n`;
   }
   
-  mensagem += `Obrigado por escolher Tamboril Burguer! 🍔\n`;
+  mensagem += `Obrigado por escolher Pedidos Express!\n`;
   mensagem += `Volte em breve! 👋`;
   
   return mensagem;
@@ -351,11 +356,11 @@ async function enviarNotificacaoEntrega(phone, displayId, customerName, delivery
 
 Olá ${customerName}! 👋
 
-Seu pedido ${displayId} acabou de sair para entrega e está a caminho! 🍔
+Seu pedido ${displayId} acabou de sair para entrega e está a caminho!
 
 ${deliveryAddress ? `📍 Endereço: ${deliveryAddress}\n` : ''}Em breve chegará até você!
 
-Obrigado por escolher Tamboril Burguer! 🍔❤️`;
+Obrigado por escolher Pedidos Express! ❤️`;
     
     return await enviarMensagem(formattedPhone, mensagem);
   } catch (error) {
@@ -411,7 +416,7 @@ async function saudacaoInicial(remetente) {
   const saudacao = hora >= 18 ? 'Boa noite' : hora >= 12 ? 'Boa tarde' : 'Bom dia';
   const conversa = getConversa(remetente);
   
-  const texto = `🍔 *TAMBORIL BURGUER*
+  const texto = `*PEDIDOS EXPRESS*
 
 ${saudacao}! 👋
 
@@ -452,7 +457,7 @@ Como podemos ajudar?
  */
 async function mostrarCardapio(remetente) {
   const conversa = getConversa(remetente);
-  let texto = `🍔 *NOSSO CARDÁPIO*
+  let texto = `*NOSSO CARDÁPIO*
 
 *HAMBÚRGUERES:*
 
@@ -753,8 +758,13 @@ async function finalizarPedido(remetente, conversa) {
     // Enviar para webhook
     const response = await fetch(WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-API-Key': TENANT_API_KEY,
+        'X-Tenant-Id': TENANT_ID
+      },
       body: JSON.stringify({
+        tenant_id: TENANT_ID, // Enviar também no body para compatibilidade
         customer_name: conversa.pedido.nome,
         customer_phone: conversa.pedido.telefone,
         items: itemsComPagamento,
@@ -796,7 +806,7 @@ ${tipoPedidoEmoji} ${tipoPedidoTexto} | 💳 ${conversa.pedido.metodoPagamento}
 
 ⏰ *Tempo estimado: ${tempoMin}-${tempoMax} minutos*
 
-🍔 Seu pedido está sendo preparado!
+Seu pedido está sendo preparado!
 
 *Obrigado pela preferência!* 😊`;
 
